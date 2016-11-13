@@ -1,0 +1,210 @@
+---
+title: "Survival Analysis Sample Data Creation"
+author: "Mick Cooney"
+date: "`r format(Sys.time(), '%d %b %Y')`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_caption: yes
+    theme: cerulean
+  pdf_document: default
+---
+
+<!--
+(Title:) Survival Analysis Sample Data Creation
+
+Author: Mick Cooney
+
+Date: 2016
+
+Abstract: This worksheet generate some very simple survival data for
+the purposes of illustration of the technique.
+
+Keywords: survival analysis, data generation
+
+-->
+
+```{r knit_opts, include = FALSE}
+rm(list = ls())
+
+knitr::opts_chunk$set(tidy  = FALSE
+                     ,cache = FALSE
+                     ,fig.height =  8
+                     ,fig.width  = 11)
+
+library(tidyverse)
+library(data.table)
+library(dtplyr)
+
+library(feather)
+
+library(survival)
+
+library(GGally)
+library(survminer)
+
+library(cowplot)
+
+
+options(width = 80L)
+
+source("custom_functions.R")
+
+set.seed(42)
+
+theme_set(theme_gray())
+```
+
+# Create Example Survival Data
+
+In this workbook we are going to generate a baseline hazard rate with
+a time-varying effect and then add some proportional hazards in
+addition to calculate some generated survival times. We will also add
+some censorship.
+
+
+```{r set_input_parameters, echo=TRUE}
+N_dataset <- 10000
+
+gender_dt <- data.table(gender      = c("M", "F")
+                       ,gender_prop = c(0.65, 0.35)
+                        )
+
+health_dt <- data.table(health      = c("Unhealthy", "Average", "Healthy")
+                       ,health_prop = c(        0.3,      0.55,      0.15)
+                        )
+
+early_rate <- 0.0180
+late_rate  <- 0.0090
+
+
+baseline_early <- rbeta(60, early_rate * 500, (1 - early_rate) * 500)
+baseline_late  <- rbeta(60, late_rate  * 200, (1 - late_rate)  * 200)
+
+baseline_hazard <- c(baseline_early, baseline_late)
+baseline_hazard <- pmax(baseline_hazard, 0.0030)
+
+
+gender_hazard <- 1.2
+health_hazard <- c("Healthy" = 0.8, "Unhealthy" = 1.3)
+age_hazard    <- function(age) 0.001 * age + 0.001 * age^2
+```
+
+Having determined the baseline hazard rate, we now create a plot of
+the hazards. We will look at both the instantaneous hazards and the
+cumulative survival rate.
+
+```{r plot_input_rates, echo=TRUE}
+ggplot() +
+    geom_line(aes(x = seq_along(baseline_hazard), y = baseline_hazard)) +
+    expand_limits(y = 0) +
+    xlab("Month") +
+    ylab("Instantaneous Chance of Failure")
+
+ggplot() +
+    geom_line(aes(x = c(0, seq_along(baseline_hazard))
+                 ,y = cumprod(c(1, 1 - baseline_hazard)))) +
+    expand_limits(y = 0) +
+    xlab("Month") +
+    ylab("Cumulative Survival Probability")
+```
+
+Now that we have set basic parameters to create the data, we now
+generate some data and generate failure times. We also uniformly
+generate observation times to ensure some of the values are censored.
+
+```{r create_survival_inputs, echo=TRUE}
+generate_fail_time <- function(probs) {
+    fail_ids <- which(runif(length(probs) + 1, 0, 1) <= c(probs, 1))
+
+    fail_ids[1]
+}
+
+
+# Generate covariate data and calculate the risk factors
+sample_dt <- CJ(gender  = gender_dt$gender
+               ,health = health_dt$health) %>%
+    inner_join(gender_dt, by = 'gender') %>%
+    inner_join(health_dt, by = 'health') %>%
+    mutate(sample_prop = gender_prop * health_prop)
+
+idx <- sample(1:nrow(sample_dt)
+             ,size = N_dataset
+             ,prob = sample_dt$sample_prop
+             ,replace = TRUE)
+
+data_dt <- sample_dt[idx] %>%
+    mutate(age_at_start = round(rnorm(n(), 40, 10))
+          ,rf_gender    = ifelse(gender == 'M', gender_hazard, 1)
+          ,rf_health    = case_when(health == 'Average'   ~ 1
+                                   ,health == 'Unhealthy' ~ 1.3
+                                   ,health == 'Healthy'   ~ 0.8)
+          ,rf_age       = age_hazard(age_at_start)
+          ,risk_factor  = rf_gender * rf_health * rf_age
+           )
+
+glimpse(data_dt)
+head(data_dt)
+```
+
+Now that we have our input data, we use this data to randomly generate
+failure times, produce observation times based on a uniform draw and
+then use this to construct failure times and censored observations.
+
+```{r generate_survival_data, echo=TRUE}
+data_dt$fail_time <- map_int(data_dt$risk_factor
+                            , ~ generate_fail_time(. * baseline_hazard))
+
+data_dt <- data_dt %>%
+    mutate(obs_time = sample(seq_along(baseline_hazard), n(), replace = TRUE)
+          ,time     = pmin(obs_time, fail_time)
+          ,fail     = ifelse(fail_time <= obs_time, TRUE, FALSE)
+           )
+
+glimpse(data_dt)
+head(data_dt)
+```
+
+With this data generated, we now look at some simple ratios for the
+failure data we have.
+
+
+```{r show_failure_data, echo=TRUE}
+data_dt %>% group_by(fail) %>% summarise(count = n()) %>% print
+```
+
+
+# Create Kaplan-Meier Estimates
+
+Now that we have a dataset to work with, we use it to perform some
+simple descriptive exploration of the data.
+
+We start with some Kaplan-Meier estimates of the cumulative survival.
+
+```{r survival_km_nosplit, echo=TRUE}
+nosplit_km <- survfit(Surv(time,fail) ~ 1, data = data_dt)
+plot_1     <- ggsurvplot(nosplit_km, censor = FALSE, size = 0.5)
+
+gender_km <- survfit(Surv(time,fail) ~ gender, data = data_dt)
+plot_2    <- ggsurvplot(gender_km, censor = FALSE, size = 0.5)
+
+health_km <- survfit(Surv(time,fail) ~ health, data = data_dt)
+plot_3    <- ggsurvplot(health_km, censor = FALSE, size = 0.5)
+
+both_km <- survfit(Surv(time,fail) ~ gender + health, data = data_dt)
+plot_4  <- ggsurvplot(both_km, censor = FALSE, size = 0.5)
+
+
+plot_grid(plot_1$plot, plot_2$plot, plot_3$plot, plot_4$plot, ncol = 2)
+```
+
+
+
+# Write to Disk
+
+```{r write_sample_data, echo=TRUE}
+write_feather(data_dt, path = 'data/sample_data.feather')
+
+saveRDS(data_dt, 'km_dashboard/data_dt.rds', compress = 'xz')
+```
