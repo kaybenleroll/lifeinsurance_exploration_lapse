@@ -3,4 +3,6 @@
 
 data/*.feather
 
+km_dashboard/*.rds
+coxph_dashboard/*.rds
 surv_dashboard/*.rds
