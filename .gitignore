@@ -3,4 +3,4 @@
 
 data/*.feather
 
-km_dashboard/*.rds
+surv_dashboard/*.rds
