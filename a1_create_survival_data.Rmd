@@ -184,16 +184,16 @@ We start with some Kaplan-Meier estimates of the cumulative survival.
 
 ```{r survival_km_nosplit, echo=TRUE}
 nosplit_km <- survfit(Surv(time,fail) ~ 1, data = data_dt)
-plot_1     <- ggsurvplot(nosplit_km, censor = FALSE, size = 0.5)
+plot_1     <- ggsurvplot(nosplit_km, censor = FALSE, size = 0.5, break.time.by = 12)
 
 gender_km <- survfit(Surv(time,fail) ~ gender, data = data_dt)
-plot_2    <- ggsurvplot(gender_km, censor = FALSE, size = 0.5)
+plot_2    <- ggsurvplot(gender_km, censor = FALSE, size = 0.5, break.time.by = 12)
 
 health_km <- survfit(Surv(time,fail) ~ health, data = data_dt)
-plot_3    <- ggsurvplot(health_km, censor = FALSE, size = 0.5)
+plot_3    <- ggsurvplot(health_km, censor = FALSE, size = 0.5, break.time.by = 12)
 
 both_km <- survfit(Surv(time,fail) ~ gender + health, data = data_dt)
-plot_4  <- ggsurvplot(both_km, censor = FALSE, size = 0.5)
+plot_4  <- ggsurvplot(both_km, censor = FALSE, size = 0.5, break.time.by = 12)
 
 
 plot_grid(plot_1$plot, plot_2$plot, plot_3$plot, plot_4$plot, ncol = 2)
