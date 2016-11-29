@@ -5,9 +5,10 @@ fit_coxph <- coxph(Surv(obs_time, fail) ~ gender + health + age_at_start, data =
 server <- function(input, output) {
 
     data_input <- reactive({
-        data_frame(gender       = input$gender
-                  ,health       = input$health
-                  ,age_at_start = input$age_at_start)
+        data_frame(gender       = c("M",       input$gender)
+                  ,health       = c("Average", input$health)
+                  ,age_at_start = c(45,        input$age_at_start)
+        )
     })
 
     output$coxph_plot <- renderPlot({
@@ -15,6 +16,18 @@ server <- function(input, output) {
 
         fit_survfit <- survfit(fit_coxph, newdata = predict_tbl)
 
-        ggsurvplot(fit_survfit, censor = FALSE, size = 0.5, break.time.by = 12)
+        person_tbl <- data_frame(person_idx = c("1","2"), person = c('Baseline', 'Calculated'))
+
+        plot_tbl <- fit_survfit$surv %>%
+            as_data_frame() %>%
+            gather("person_idx", "cuml_surv") %>%
+            inner_join(person_tbl, by = 'person_idx') %>%
+            group_by(person) %>%
+            mutate(month = 1:n())
+
+        ggplot(plot_tbl) +
+            geom_line(aes(x = month, y = cuml_surv, colour = person)) +
+            xlab("Month") +
+            ylab("Cumulative Survival")
     })
 }
