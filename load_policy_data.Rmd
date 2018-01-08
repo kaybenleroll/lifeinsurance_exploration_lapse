@@ -1,0 +1,90 @@
+---
+title: "Life Policy Book Analysis: Load Data"
+author: "Mick Cooney <mickcooney@gmail.com>"
+date: "2018-01-04"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_caption: yes
+    theme: cerulean
+  pdf_document: default
+---
+
+
+```{r knit_opts, include = FALSE}
+knitr::opts_chunk$set(tidy = FALSE, cache = FALSE)
+
+library(tidyverse)
+
+library(feather)
+
+
+options(width = 80L)
+
+source("custom_functions.R")
+
+set.seed(42)
+```
+
+# Load Input Data
+
+This worksheet loads up the data of the book of life insurance
+policies and some very basic data exploration.
+
+```{r setup_params, echo=TRUE}
+data_snapshot_date <- as.Date('2015-12-31')
+```
+
+With the original dataset
+
+
+```{r load_data, echo=TRUE}
+lifebook_tbl <- read_csv("data/lifebook_data.csv"
+                        ,progress = FALSE
+                         )
+
+protection_book_tbl <- lifebook_tbl %>%
+    filter(prod_type == 'protection'
+          ,prem_freq == 12
+          ,prem_type == 'RP'
+           )
+```
+
+# Create Derived Values
+
+Now that we have loaded the data we do a bit of feature engineering to calculate a few new and useful variables.
+
+```{r do_feature_engineering, echo=TRUE, results='hide'}
+protection_book_tbl <- protection_book_tbl %>%
+    mutate(age_at_data_snapshot = as.numeric((data_snapshot_date - dob_life1) / 365.25)
+          ,age_at_policy_start  = as.numeric((policy_startdate   - dob_life1) / 365.25)
+          ,month_reached        = case_when(
+              policy_status == 'lapsed'    ~ as.numeric(policy_statuschangedate - policy_startdate) / 30.4
+             ,policy_status == 'completed' ~ as.numeric(policy_duration * 12)
+             ,policy_status == 'inforce'   ~ as.numeric(data_snapshot_date - policy_startdate) / 30.4
+                )
+          ,month_reached        = month_reached %>% round(0) %>% as.integer
+    )
+
+```
+
+
+
+# Analyse Lapse Data
+
+```{r calculate_monthly_lapses, echo=TRUE}
+data_lapse_month <- protection_book_tbl %>%
+    pull(policy_startdate) %>%
+    min() %>%
+    format('%Y-%m-01') %>%
+    as.Date()
+
+
+month_dates <- seq(data_lapse_month, data_snapshot_date, by = 'month')
+
+monthstart_tbl <- protection_book_tbl %>%
+    mutate(month_start = format(policy_startdate, "%Y%m")) %>%
+    select(month_start, policy_id)
+
+```

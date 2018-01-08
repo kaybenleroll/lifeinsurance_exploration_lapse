@@ -2,7 +2,9 @@
 .RData
 
 data/*.feather
+data/*.csv
 
 km_dashboard/*.rds
 coxph_dashboard/*.rds
 surv_dashboard/*.rds
+.Rproj.user
