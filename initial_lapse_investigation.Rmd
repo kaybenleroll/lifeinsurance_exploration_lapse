@@ -1,0 +1,263 @@
+---
+title: "Life Policy Book Analysis: Initial Lapse Investigation"
+author: "Mick Cooney <mickcooney@gmail.com>"
+date: "2018-01-04"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_caption: yes
+    theme: cerulean
+  pdf_document: default
+---
+
+
+```{r knit_opts, include = FALSE}
+rm(list = ls())
+
+library(tidyverse)
+library(scales)
+library(cowplot)
+
+library(feather)
+
+options(width = 90L
+       ,warn  = 1)
+
+knitr::opts_chunk$set(tidy       = FALSE
+                     ,cache      = FALSE
+                     ,warning    = FALSE
+                     ,message    = FALSE
+                     ,fig.height =     8
+                     ,fig.width  =    11
+                     )
+
+set.seed(42)
+
+source("custom_functions.R")
+```
+
+# Load Input Data
+
+This worksheet loads up the data of the book of life insurance
+policies and some very basic data exploration.
+
+```{r setup_params, echo=TRUE}
+data_snapshot_date <- as.Date('2015-12-31')
+```
+
+With the original dataset we had all four product types: Protection, Savings,
+Pensions and Alternative Retirement Funds (ARFs).
+
+
+```{r load_data, echo=TRUE}
+lifebook_tbl <- read_feather("data/lifebook_cleaned.feather")
+                        
+protection_book_tbl <- lifebook_tbl %>%
+    filter(prod_type == 'protection'
+          ,prem_freq == 12
+          ,prem_type == 'RP'
+           )
+
+protection_book_tbl %>% glimpse
+```
+
+So we have over 700,000 protection policies with a monthly payment frequency.
+
+This dataset will be the basis of our lapse investigation, but to do so we
+need to create a few extra derived variables.
+
+## Create Derived Values
+
+Now that we have loaded the data we do a bit of feature engineering to
+calculate a few new and useful variables.
+
+```{r do_feature_engineering, echo=TRUE, results='hide'}
+protection_book_tbl <- protection_book_tbl %>%
+    mutate(age_at_data_snapshot = as.numeric((data_snapshot_date - dob_life1) / 365.25)
+          ,age_at_policy_start  = as.numeric((policy_startdate   - dob_life1) / 365.25)
+          ,month_reached        = case_when(
+              policy_status == 'lapsed'    ~ as.numeric(policy_statuschangedate - policy_startdate) / 30.4
+             ,policy_status == 'completed' ~ as.numeric(policy_duration * 12)
+             ,policy_status == 'inforce'   ~ as.numeric(data_snapshot_date - policy_startdate) / 30.4
+                ) %>% round(0) %>% as.integer
+    )
+
+protection_book_tbl %>% glimpse
+```
+
+We now need to do some basic exploration of the variables before we model them.
+
+
+## Exploration of Derived Values
+
+First we make some simple univariate plots of the derived values.
+
+```{r data_exploration_vars, echo=TRUE}
+dataexp_level_exclusion_threshold <- 100
+
+dataexp_cat_level_count <- 40
+dataexp_hist_bins_count <- 50
+```
+
+
+
+```{r create_univariate_numeric_plots, echo=TRUE, warning=FALSE}
+derived_vars <- c('age_at_data_snapshot', 'age_at_policy_start', 'month_reached')
+
+for(plot_varname in derived_vars) {
+    cat("--\n")
+    cat(paste0(plot_varname, '\n'))
+
+    plot_var <- protection_book_tbl %>% .[[plot_varname]]
+    na_count <- plot_var %>% is.na %>% sum
+
+    plot_var %>% summary %>% print
+
+    explore_plot <- ggplot(protection_book_tbl) +
+        geom_histogram(aes_string(x = plot_varname), bins = dataexp_hist_bins_count) +
+        geom_vline(xintercept = mean  (plot_var, na.rm = TRUE), colour = 'red',   size = 1.5) +
+        geom_vline(xintercept = median(plot_var, na.rm = TRUE), colour = 'green', size = 1.5) +
+        xlab(plot_varname) +
+        ylab("Count") +
+        scale_x_continuous(labels = comma) +
+        scale_y_continuous(labels = comma) +
+        ggtitle(paste0('Histogram Plot for Variable: ', plot_varname
+                      ,' (', na_count, ' missing values)')
+               ,subtitle = '(red line is mean, green line is median)')
+
+    print(explore_plot)
+}
+```
+
+
+
+# Initial Empirical Lapse Analysis
+
+Prior to starting our model we want to look at the progression of monthly lapse
+rates.
+
+To calculate this data we need to count the number of in-force policies during
+each month as well as the count of policies that lapsed in that month.
+
+We do this by calculating the cumulative sum of policy starts in each month, as
+well as the counts of policies going out-of-force from lapses or reaching
+end-of-life. The difference of the two gives us a count of in-force policies on
+the book each month, and we then use this to calculate the empirical lapse rate.
+
+Note that we round all dates to the start of the month and so there are slight
+timing issues around that, but we can ignore those for now.
+
+```{r calculate_monthly_lapses, echo=TRUE}
+tstamp_first_month <- protection_book_tbl %>%
+    pull(policy_startdate) %>%
+    min() %>%
+    format('%Y-%m-01') %>%
+    as.Date()
+
+tstamp_months_tbl <- data_frame(tstamp_month = seq(tstamp_first_month, data_snapshot_date, by = 'month'))
+
+
+count_start_tbl <- protection_book_tbl %>%
+    mutate(start_month  = policy_startdate %>% format("%Y-%m-01") %>% as.Date()) %>%
+    count(start_month) %>%
+    rename(start_count = n)
+
+count_end_tbl <- protection_book_tbl %>%
+    mutate(oof_date = case_when(
+                policy_status == 'lapsed' ~ policy_statuschangedate
+               ,TRUE                      ~ policy_enddate
+                )
+          ,oof_month = oof_date %>% format('%Y-%m-01') %>% as.Date()
+    ) %>%
+    count(oof_month) %>%
+    rename(oof_count = n)
+
+
+count_lapse_tbl <- protection_book_tbl %>%
+    filter(policy_status == 'lapsed') %>%
+    mutate(lapse_month = policy_statuschangedate %>% format('%Y-%m-01') %>% as.Date()) %>%
+    count(lapse_month) %>%
+    rename(lapse_count = n)
+
+
+lapse_data_tbl <- tstamp_months_tbl %>%
+    left_join(count_start_tbl, by = c('tstamp_month' = 'start_month')) %>%
+    left_join(count_end_tbl,   by = c('tstamp_month' = 'oof_month')) %>%
+    left_join(count_lapse_tbl, by = c('tstamp_month' = 'lapse_month')) %>%
+    replace_na(list(start_count = 0, oof_count = 0, lapse_count = 0)) %>%
+    mutate(inforce_count = cumsum(start_count) - cumsum(oof_count)
+          ,lapse_rate    = lapse_count / inforce_count
+          )
+```
+
+With the lapse data calculate we now want to look at the lapse rate.
+
+```{r plot_empirical_lapse_rate, echo=TRUE}
+ggplot(lapse_data_tbl) +
+    geom_line(aes(x = tstamp_month, y = lapse_rate)) +
+    expand_limits(y = 0) +
+    xlab('Month') +
+    ylab('Lapse Rate') +
+    ggtitle('Lineplot of the Monthly Empirical Lapse Rate')
+```
+
+The early lapse rate is very noisy, probably due to the effects of the business
+starting up and so low policy counts. To check this, we need to look at time
+based effects of policy starts and the count of policies in force.
+
+```{r plot_policy_inforce_count, echo=TRUE}
+ggplot(lapse_data_tbl) +
+    geom_line(aes(x = tstamp_month, y = inforce_count)) +
+    expand_limits(y = 0) +
+    scale_y_continuous(labels = comma) +
+     xlab('Month') +
+    ylab('Count of In-force Policies') +
+    ggtitle('Lineplot of the Monthly In-force Policy Count')
+```
+
+We see a steady increase in the inforce book, with it peaking around 2008 or
+so, declining after that. This may be due to a number of reasons, so we look
+at the patterns for new policies as well.
+
+```{r plot_policy_start_count, echo=TRUE}
+ggplot(lapse_data_tbl) +
+    geom_line(aes(x = tstamp_month, y = start_count)) +
+    expand_limits(y = 0) +
+    scale_y_continuous(labels = comma) +
+    xlab('Month') +
+    ylab('Count of New Policies') +
+    ggtitle('Lineplot of the Monthly New Policy Count')
+```
+
+This plot suggests a strong calendar pattern for new policies, but is otherwise
+fairly constant with a noticeable upshift in levels froms the years 2000-2010.
+
+This makes sense for Ireland as this coincides with a huge property boom during
+that period, which fuelled a huge demand for life insurance tied to mortgages.
+
+Beyond that, the pattern observed for the in-force book is due to the mismatch
+between the observed window of time and the duration of policies. Many polices
+have a duration of over twenty years, so the inforce levels of policies need
+more time to stabilise.
+
+As a final comparison, we will plot both the lapse rate and the count of
+in-force policies together on a single panel plot. We plot from the start of 1996
+to reduce the effects of the initial years from the plot
+
+
+```{r plot_lapse_inforce, echo=TRUE}
+plot_tbl <- lapse_data_tbl %>%
+    filter(tstamp_month >= as.Date('1996-01-01')) %>%
+    dplyr::select(tstamp_month, lapse_rate, inforce_count) %>%
+    gather('key', 'value', -tstamp_month)
+
+ggplot(plot_tbl) + 
+    geom_line(aes(x = tstamp_month, y = value)) +
+    expand_limits(y = 0) +
+    facet_wrap(~key, ncol = 1, scales = 'free_y') +
+    scale_y_continuous(labels = comma) +
+    xlab('Month') +
+    ylab('Value')
+```
+
