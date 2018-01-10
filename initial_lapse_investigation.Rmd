@@ -16,10 +16,14 @@ output:
 rm(list = ls())
 
 library(tidyverse)
+library(feather)
 library(scales)
 library(cowplot)
+library(survival)
+library(survminer)
+library(modelr)
+library(broom)
 
-library(feather)
 
 options(width = 90L
        ,warn  = 1)
@@ -81,7 +85,8 @@ protection_book_tbl <- protection_book_tbl %>%
              ,policy_status == 'completed' ~ as.numeric(policy_duration * 12)
              ,policy_status == 'inforce'   ~ as.numeric(data_snapshot_date - policy_startdate) / 30.4
                 ) %>% round(0) %>% as.integer
-    )
+    ) %>%
+    filter(month_reached > 0)
 
 protection_book_tbl %>% glimpse
 ```
@@ -260,4 +265,265 @@ ggplot(plot_tbl) +
     xlab('Month') +
     ylab('Value')
 ```
+
+## Investigating the Recession
+
+We would like to identify the jump in lapse rates and determine the start and
+end dates for this. 2006 was still the boom times and it was over by the end of
+2013, so we plot those times first.
+
+```{r plot_boom_lapses, echo=TRUE}
+ggplot(lapse_data_tbl %>% filter(tstamp_month >= as.Date('2007-01-01')
+                                ,tstamp_month <= as.Date('2013-12-31'))) +
+    geom_line(aes(x = tstamp_month, y = lapse_rate)) +
+    expand_limits(y = 0) +
+    xlab('Month') +
+    ylab('Lapse Rate') +
+    ggtitle('Lineplot of the Monthly Empirical Lapse Rate for Boom Times')
+```
+
+Looking at this data, it seems reasonable to flag the recession as starting at
+the beginning of 2008 and ending at the end of 2012.
+
+```{r add_lapse_flags, echo=TRUE}
+lapse_data_tbl <- lapse_data_tbl %>%
+    mutate(epoch_label = case_when(
+               tstamp_month < as.Date('2008-01-01')        ~ 'Pre-Recession'
+              ,tstamp_month >= as.Date('2008-01-01') &
+               tstamp_month <= as.Date('2012-12-31')       ~ 'Recession'
+              ,TRUE                                        ~ 'Post-Recession'
+            )
+        )
+
+
+ggplot(lapse_data_tbl %>% filter(tstamp_month >= as.Date('2007-01-01')
+                                ,tstamp_month <= as.Date('2013-12-31'))) +
+    geom_line(aes(x = tstamp_month, y = lapse_rate, colour = epoch_label)) +
+    expand_limits(y = 0) +
+    xlab('Month') +
+    ylab('Lapse Rate') +
+    ggtitle('Lineplot of the Monthly Empirical Lapse Rate around Recession')
+```
+
+These epochs will be useful later when accounting for the recession in future
+models.
+
+
+## Data Censorship
+
+One final investigation that may be useful is to see how much censorship we
+have in our data. We observed the status of the book of policies at a given
+point in time - the end of 2015, and so we do not have complete observation of
+the life times of the policies. Many of the policy lifetimes are
+*left-censored* as a result.
+
+In the case where the amount of censoring is small relative to the size of the
+dataset we could potentially ignore it, otherwise our modelling will need to
+account for this phenomenon in the data.
+
+To check the prevalence of censoring, we do a simple check of the proportions
+of the different policy statuses in our data.
+
+
+```{r calculate_status_proportions, echo=TRUE}
+ggplot(lifebook_tbl %>% count(policy_status)) +
+    geom_col(aes(x = policy_status, y = n)) +
+    scale_y_continuous(labels = comma) +
+    xlab('Policy Status') +
+    ylab('Count') +
+    ggtitle('Plot of Proportions of Policy Status (All Data)')
+```
+
+Looking at all the data, it appears there is significant censoring. That said,
+we may decide that older lapse patterns are different from today, and so we
+restrict this plot to more recent policies (say from 2000 on and from 2005 on)
+
+```{r plot_status_props_filtered, echo=TRUE}
+ggplot(lifebook_tbl %>% filter(policy_startdate >= as.Date('2000-01-01')) %>% count(policy_status)) +
+    geom_col(aes(x = policy_status, y = n)) +
+    scale_y_continuous(labels = comma) +
+    xlab('Policy Status') +
+    ylab('Count') +
+    ggtitle('Plot of Proportions of Policy Status (post 2000)')
+
+
+ggplot(lifebook_tbl %>% filter(policy_startdate >= as.Date('2005-01-01')) %>% count(policy_status)) +
+    geom_col(aes(x = policy_status, y = n)) +
+    scale_y_continuous(labels = comma) +
+    xlab('Policy Status') +
+    ylab('Count') +
+    ggtitle('Plot of Proportions of Policy Status (post 2000)')
+```
+
+Focusing on more recent policies we see that censoring becomes more and more
+important, so we need to account for this in our modelling.
+
+For this reason, we will look at various survival analysis techniques as these
+naturally allow for the censorship of the data.
+
+
+Before we move on to more formal modelling, it is interesting to see the
+difference between censored and non-censored observations in the data.
+
+To do that, we create two histograms and look at the different distributions.
+
+
+```{r plot_cens_noncens_lifetimes, echo=TRUE}
+ggplot(protection_book_tbl) +
+    geom_histogram(aes(x = month_reached), bins = 50) +
+    facet_wrap(~ lapsed, ncol = 2) +
+    scale_y_continuous(labels = comma) +
+    xlab("Observed Lifetime") +
+    ylab("Count") +
+    ggtitle("Lifetime Comparison for Lapsed and Non-lapsed Policies")
+```
+
+Once more we filter out the older policies in the book, and look at post-2000
+and post-2005 policies:
+
+```{r plot_cens_noncens_lifetimes_2000, echo=TRUE}
+ggplot(protection_book_tbl %>% filter(policy_startdate >= as.Date('2000-01-01'))) +
+    geom_histogram(aes(x = month_reached), bins = 50) +
+    facet_wrap(~ lapsed, ncol = 2) +
+    scale_y_continuous(labels = comma) +
+    xlab("Observed Lifetime") +
+    ylab("Count") +
+    ggtitle("Lifetime Comparison for Lapsed and Non-lapsed post-2000 Policies")
+```
+
+
+
+```{r plot_cens_noncens_lifetimes_2005, echo=TRUE}
+ggplot(protection_book_tbl %>% filter(policy_startdate >= as.Date('2005-01-01'))) +
+    geom_histogram(aes(x = month_reached), bins = 50) +
+    facet_wrap(~ lapsed, ncol = 2) +
+    scale_y_continuous(labels = comma) +
+    xlab("Observed Lifetime") +
+    ylab("Count") +
+    ggtitle("Lifetime Comparison for Lapsed and Non-lapsed post-2005 Policies")
+```
+
+
+
+# Using Survival Analysis Techniques
+
+Having done our preliminary analysis, we now turn our attention to the use of
+survival analysis techniques to tackle this problem as a large proportion of
+our data is censored.
+
+## Kaplan-Meier Estimates
+
+One of the first things we can look at is the Kaplan-Meier estimates for this
+data, first looking at the all the data without splitting along any categorical
+variables.
+
+```{r create_simple_km_estimate, echo=TRUE}
+lapse_basic_km <- survfit(Surv(month_reached, lapsed) ~ 1
+                         ,data = protection_book_tbl)
+
+ggsurvplot(lapse_basic_km, censor = FALSE, break.time.by = 12)
+```
+
+This looks like a roughly exponential curve, though with a slightly higher
+cumulative survival for the 24-60 month period. We will return to this
+comparison later.
+
+Now we look at alternative KM estimates, splitting the data on both gender
+and the smoking status of the primary policy holder.
+
+```{r create_gender_km_estimate, echo=TRUE}
+lapse_gender_km <- survfit(Surv(month_reached, lapsed) ~ gender_life1
+                          ,data = protection_book_tbl)
+
+ggsurvplot(lapse_gender_km, censor = FALSE, break.time.by = 12)
+```
+
+We can see distinct differences between male and female policy holders in
+terms of expected time to lapse, especially for in the periods between 12-60
+months. This is likely affected by differences in premium charged as before the
+2012 Gender Price Directive, gender was a big price differentiator for life
+insurance policies and we surmise that a higher premium raises the likelihood
+of a policy lapsing.
+
+It is interesting to note that any differences in gender are largely gone after
+about ten years of policy lifetime.
+
+We now move on to investigating lapse differences for smokers.
+
+```{r create_smoker_km_estimate, echo=TRUE}
+lapse_smoker_km <- survfit(Surv(month_reached, lapsed) ~ smoker_life1
+                          ,data = protection_book_tbl)
+
+ggsurvplot(lapse_smoker_km, censor = FALSE, break.time.by = 12)
+```
+
+There are three smoking statuses: Smoker, Non-Smoker and Quitter, so we get
+three KM estimates. Here the message is more nuanced - smokers lapse more
+often early on, but become the least likely to lapse after 72 months or so.
+
+
+# Cox Proportional Hazards Model
+
+We now want to look at building regression models for our data, so we first
+split our data into the traditional machine-learning train/test split.
+
+```{r split_data, echo=TRUE}
+test_prop <- 0.2
+
+split_lst <- protection_book_tbl %>%
+    resample_partition(c(train = 1 - test_prop, test = test_prop))
+```
+
+## Initial Exploratory Models
+
+To get a feel for the types of models we want to build and how they might
+work, we focus initially on the `gender` and `smoker` variables to start.
+
+Note that we are still very much in the 'exploration' phase: the purposes of
+these models is to get a feel for the data - we are not yet moving on to
+producing models for the purposes of prediction just yet.
+
+For our first model, we simply fit the data to the gender parameter:
+
+```{r fit_01_model, echo=TRUE}
+basic_01_model <- coxph(Surv(month_reached, lapsed) ~ gender_life1
+                       ,data = split_lst$train
+                        )
+
+basic_01_model %>% summary
+basic_01_model %>% tidy()
+basic_01_model %>% glance()
+```
+
+The concordance index for this model is about 0.51 - only slightly above the
+reference level of 0.50, so this model contains little in the way of predictive
+power.
+
+We also want to add smoking status, so we try that.
+
+```{r fit_02_model, echo=TRUE}
+basic_02_model <- coxph(Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1
+                       ,data = split_lst$train
+                        )
+
+basic_02_model %>% summary
+basic_02_model %>% tidy()
+basic_02_model %>% glance()
+```
+
+Once again we have a low concordance index for this model, so we need to do
+better.
+
+
+
+
+
+
+
+
+
+
+
+
+
 
