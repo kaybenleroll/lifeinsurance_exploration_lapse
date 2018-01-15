@@ -470,6 +470,9 @@ ggsurvplot(lapse_smoker_km, censor = FALSE, break.time.by = 12, conf.int = TRUE)
 
 split_lst &lt;- protection_book_tbl %&gt;%
     resample_partition(c(train = 1 - test_prop, test = test_prop))</code></pre>
+<p>We output the split for later use in further worksheets.</p>
+<pre class="r"><code>split_lst$train %&gt;% as_data_frame %&gt;% write_feather(path = 'data/protection_train.feather')
+split_lst$test  %&gt;% as_data_frame %&gt;% write_feather(path = 'data/protection_test.feather')</code></pre>
 <div id="initial-exploratory-models" class="section level2">
 <h2><span class="header-section-number">4.1</span> Initial Exploratory Models</h2>
 <p>To get a feel for the types of models we want to build and how they might work, we focus initially on the <code>gender</code> and <code>smoker</code> variables to start.</p>

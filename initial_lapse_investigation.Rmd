@@ -474,6 +474,15 @@ split_lst <- protection_book_tbl %>%
     resample_partition(c(train = 1 - test_prop, test = test_prop))
 ```
 
+We output the split for later use in further worksheets.
+
+```{r output_train_test_data_split, echo=TRUE}
+split_lst$train %>% as_data_frame %>% write_feather(path = 'data/protection_train.feather')
+split_lst$test  %>% as_data_frame %>% write_feather(path = 'data/protection_test.feather')
+```
+
+
+
 ## Initial Exploratory Models
 
 To get a feel for the types of models we want to build and how they might
