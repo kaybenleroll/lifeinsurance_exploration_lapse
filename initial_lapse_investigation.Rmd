@@ -36,7 +36,7 @@ knitr::opts_chunk$set(tidy       = FALSE
                      ,fig.width  =    11
                      )
 
-set.seed(42)
+set.seed(421)
 
 source("custom_functions.R")
 ```
@@ -421,7 +421,7 @@ variables.
 lapse_basic_km <- survfit(Surv(month_reached, lapsed) ~ 1
                          ,data = protection_book_tbl)
 
-ggsurvplot(lapse_basic_km, censor = FALSE, break.time.by = 12)
+ggsurvplot(lapse_basic_km, censor = FALSE, break.time.by = 12, conf.int = TRUE)
 ```
 
 This looks like a roughly exponential curve, though with a slightly higher
@@ -435,7 +435,7 @@ and the smoking status of the primary policy holder.
 lapse_gender_km <- survfit(Surv(month_reached, lapsed) ~ gender_life1
                           ,data = protection_book_tbl)
 
-ggsurvplot(lapse_gender_km, censor = FALSE, break.time.by = 12)
+ggsurvplot(lapse_gender_km, censor = FALSE, break.time.by = 12, conf.int = TRUE)
 ```
 
 We can see distinct differences between male and female policy holders in
@@ -454,7 +454,7 @@ We now move on to investigating lapse differences for smokers.
 lapse_smoker_km <- survfit(Surv(month_reached, lapsed) ~ smoker_life1
                           ,data = protection_book_tbl)
 
-ggsurvplot(lapse_smoker_km, censor = FALSE, break.time.by = 12)
+ggsurvplot(lapse_smoker_km, censor = FALSE, break.time.by = 12, conf.int = TRUE)
 ```
 
 There are three smoking statuses: Smoker, Non-Smoker and Quitter, so we get
@@ -468,7 +468,7 @@ We now want to look at building regression models for our data, so we first
 split our data into the traditional machine-learning train/test split.
 
 ```{r split_data, echo=TRUE}
-test_prop <- 0.2
+test_prop <- 0.4
 
 split_lst <- protection_book_tbl %>%
     resample_partition(c(train = 1 - test_prop, test = test_prop))
@@ -486,33 +486,218 @@ producing models for the purposes of prediction just yet.
 For our first model, we simply fit the data to the gender parameter:
 
 ```{r fit_01_model, echo=TRUE}
-basic_01_model <- coxph(Surv(month_reached, lapsed) ~ gender_life1
+basic_01_coxph <- coxph(Surv(month_reached, lapsed) ~ gender_life1
                        ,data = split_lst$train
                         )
 
-basic_01_model %>% summary
-basic_01_model %>% tidy()
-basic_01_model %>% glance()
+basic_01_coxph %>% summary
+basic_01_coxph %>% tidy()
+basic_01_coxph %>% glance()
 ```
 
 The concordance index for this model is about 0.51 - only slightly above the
 reference level of 0.50, so this model contains little in the way of predictive
 power.
 
-We also want to add smoking status, so we try that.
+We also want to add smoking status, so we try that. We will look at its effect
+as the sole predictor first.
 
 ```{r fit_02_model, echo=TRUE}
-basic_02_model <- coxph(Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1
+basic_02_coxph <- coxph(Surv(month_reached, lapsed) ~ smoker_life1
                        ,data = split_lst$train
                         )
 
-basic_02_model %>% summary
-basic_02_model %>% tidy()
-basic_02_model %>% glance()
+basic_02_coxph %>% summary
+basic_02_coxph %>% tidy()
+basic_02_coxph %>% glance()
 ```
 
 Once again we have a low concordance index for this model, so we need to do
 better.
+
+We do have a socio-economic clustering in this data, and we do know that this
+had a profound effect on the economy with young families losing their job and
+forgoing their mortgage for example, so we look at that.
+
+```{r fit_03_model, echo=TRUE}
+basic_03_coxph <- coxph(
+    Surv(month_reached, lapsed) ~ cluster_id
+   ,data = split_lst$train
+                        )
+
+basic_03_coxph %>% summary
+basic_03_coxph %>% tidy()
+basic_03_coxph %>% glance()
+```
+
+The concordance index is now over 0.56 so the cluster of the policy owner
+contains predictive power for the propensity of the policy to lapse.
+
+We now look at the model with all three predictors combined as predictors in
+the model.
+
+```{r fit_04_model, echo=TRUE}
+basic_04_coxph <- coxph(
+    Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1 + cluster_id
+   ,data = split_lst$train
+                        )
+
+basic_04_coxph %>% summary
+basic_04_coxph %>% tidy()
+basic_04_coxph %>% glance()
+```
+
+Note that the model with just the `cluster_id` as a predictor gives a better
+concordance than models with more variables, which is counterintuitive from
+a regression point of view. This definitely requires investigation, as it is
+likely due to violations of the assumptions of the Cox-PH model. Even so, we
+would hope for a better concordance index than 0.56, so we need a more thorough
+analysis.
+
+
+## Testing the Model Assumptions
+
+Another possible reason for the lack of predictive power in the model is because
+the assumptions in the model may not hold.
+
+The main assumption of the CoxPH models is for the coefficients of the model
+to be constant over time. We first check the univariate model with gender:
+
+```{r test_ph_assumptions_model_01, echo=TRUE, fig.height=10, fig.width=14}
+basic_01_coxph %>% cox.zph() %>% ggcoxzph(resid = FALSE)
+```
+
+It is pretty clear that gender has an effect, but is not a time-independent
+effect. This is something we will need to deal with somehow.
+
+```{r test_ph_assumptions_model_02, echo=TRUE, fig.height=10, fig.width=14}
+basic_02_coxph %>% cox.zph() %>% ggcoxzph(resid = FALSE)
+```
+
+Smoking status seems very similar to gender - there is an effect, but it not
+time-independent.
+
+We look at the clustering now.
+
+```{r test_ph_assumptions_model_03, echo=TRUE, fig.height=10, fig.width=14}
+basic_03_coxph %>% cox.zph() %>% ggcoxzph(resid = FALSE)
+```
+
+The clustering is around 0 for some of the levels, but the signification ones
+are not time-independent.
+
+Finally, we look at the combined model, which we expect to give us a similar
+message.
+
+
+```{r test_ph_assumptions_model_04, echo=TRUE, fig.height=10, fig.width=14}
+basic_04_coxph %>% cox.zph() %>% ggcoxzph(resid = FALSE)
+```
+
+
+## Using the Secret Weapon
+
+We now use a simple technique known as the 'Secret Weapon' by Andrew Gelman.
+With this method we partition the data along various dimensions, fitting the
+same model to each partition and then plotting coefficients together to get a
+sense of the variability.
+
+We know that the CoxPH model has issues as it violates the assumptions of the
+model, but it is likely to be instructive anyway. We will almost make a plot
+of the concordance index as well as the p-value from the `cox.zph()` test to
+see if there are any calendar patterns to the violation of the assumptions.
+
+
+```{r split_data_by_policy_year, echo=TRUE}
+secretweapon_year_lst <- split_lst$train %>%
+    as_data_frame() %>%
+    mutate(split_label = format(policy_startdate, '%Y')) %>%
+    split(.$split_label) %>%
+    map(~ coxph(Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1 + cluster_id
+               ,data = .))
+
+coefs_tbl <- secretweapon_year_lst %>%
+    map(tidy) %>%
+    bind_rows(.id = 'start_year')
+
+metrics_tbl <- secretweapon_year_lst %>%
+    map(glance) %>%
+    bind_rows(.id = 'start_year') %>%
+    transmute(start_year
+             ,term      = 'concordance'
+             ,estimate  = concordance
+             ,std.error = std.error.concordance)
+
+secretweapon_year_tbl <- list(coefs_tbl, metrics_tbl) %>%
+    bind_rows() %>%
+    mutate(start_year = start_year %>% as.integer)
+```
+
+Having calculated both the parameter coefficients and the concordance index after
+splitting the data by policy year, we now plot the coefficients of the model
+as well as the concordance index, including the error bars.
+
+
+```{r plot_secret_weapon_values, echo=TRUE}
+ggplot(secretweapon_year_tbl) +
+    geom_point(aes(x = start_year, y = estimate)) +
+    geom_errorbar(aes(x    = start_year
+                     ,ymin = estimate - 2 * std.error
+                     ,ymax = estimate + 2 * std.error)
+                 ,width = 0) +
+    expand_limits(y = 0) +
+    facet_wrap(~term, scales='free_y') +
+    xlab("Start Year") +
+    ylab("Parameter Value") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+Finally, we do a plot of the p-values from the `cox.zph()` test and construct
+the same plot.
+
+
+```{r show_split_test_metrics, echo=TRUE}
+extract_test_values <- function(input) {
+    test_tbl <- input %>%
+        cox.zph() %>%
+        .$table %>%
+        as.data.frame() %>%
+        rownames_to_column('term')
+
+    return(test_tbl)
+}
+
+
+secretweapon_year_test_tbl <- secretweapon_year_lst %>%
+    map(extract_test_values) %>%
+    bind_rows(.id = 'start_year') %>%
+    mutate(start_year = start_year %>% as.integer)
+
+
+ggplot(secretweapon_year_test_tbl) +
+    geom_point(aes(x = start_year, y = p)) +
+    expand_limits(y = 0) +
+    facet_wrap(~term) +
+    xlab("Start Year") +
+    ylab("Parameter Value") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+
+It seems pretty clear that while there appears to be a calendar effect on the
+lapse rates, it does not affect the violation of CoxPH assumptions.
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
