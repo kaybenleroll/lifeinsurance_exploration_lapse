@@ -1,0 +1,210 @@
+---
+title: "Life Policy Book Analysis: Time-Varying Effects Lapse Analysis"
+author: "Mick Cooney <mickcooney@gmail.com>"
+date: "2018-01-04"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_caption: yes
+    theme: cerulean
+  pdf_document: default
+---
+
+
+```{r knit_opts, include = FALSE}
+rm(list = ls())
+
+library(tidyverse)
+library(feather)
+library(scales)
+library(cowplot)
+library(survival)
+library(survminer)
+library(modelr)
+library(broom)
+
+
+options(width = 90L
+       ,warn  = 1)
+
+knitr::opts_chunk$set(tidy       = FALSE
+                     ,cache      = FALSE
+                     ,warning    = FALSE
+                     ,message    = FALSE
+                     ,fig.height =     8
+                     ,fig.width  =    11
+                     )
+
+set.seed(421)
+
+source("custom_functions.R")
+```
+
+Having introduced the concept of using survival analysis to investigate lapse
+risks we now perform a much more in-depth analysis using various additional
+techniques.
+
+
+# Load Training/Test Data
+
+We first load the training and test data into separate tables.
+
+```{r load_data, echo=TRUE}
+snapshot_date <- as.Date('2015-12-31')
+
+train_tbl <- read_feather("data/protection_train.feather")
+test_tbl  <- read_feather('data/protection_test.feather')
+
+train_tbl %>% glimpse
+test_tbl  %>% glimpse
+```
+
+We do a quick check to ensure that there are no updates in the data after the
+snapshot date:
+
+```{r perform_quick_data_checks, echo=TRUE}
+train_tbl %>%
+    filter(policy_statuschangedate >= snapshot_date ||
+           policy_startdate        >= snapshot_date
+           ) %>%
+    glimpse
+
+test_tbl %>%
+    filter(policy_statuschangedate >= snapshot_date ||
+           policy_startdate        >= snapshot_date
+           ) %>%
+    glimpse
+```
+
+Our training set is relatively large, with almost 500,000 policies to analyse
+in the training set alone.
+
+To facilitate faster computation of whatever models we choose to fit, we
+randomly sample data
+
+```{r randomly_sample_data, echo=TRUE}
+use_train_tbl <- train_tbl %>%
+    sample_n(50000)
+```
+
+
+# Extensions of the Cox-PH Model
+
+
+## Create Regression Split
+
+We know that that Great Recession from 2008-2012 had a big effect on increasing
+lapse rates during that period of time.
+
+As a result we split each policy into up to three separate entries: one entry
+up to the start of the recession, one during the recession, and then one for
+after the recession. Depending on the start, end and lapse time for the policy,
+each policy line will be split into 1, 2, or 3 new entries in the table.
+
+THe splitting process is relatively slow and is in need of efficiency
+improvements. As a result, I split the data on a subset of it and observe
+the effect.
+
+
+```{r split_recession_data, echo=TRUE}
+recess_start_date <- as.Date('2008-01-01')
+recess_end_date   <- as.Date('2012-12-31')
+
+
+# recess_split_tbl <- use_train_tbl %>%
+#     mutate(policy_final_date = ifelse(policy_status == 'inforce'
+#                                      ,snapshot_date
+#                                      ,policy_statuschangedate) %>% as.Date(origin = '1970-01-01'))
+# 
+#           ,observed_month  = (as.numeric(policy_final_date - policy_start_date) / 30.4)
+#           ,recession_month = (as.numeric(recess_end_date   - recess_start_date) / 30.4)
+#           ,polstart_start_month = (as.numeric(recess_start_date - policy_start_date) / 30.4)
+#           ,polstart_end_month   = (as.numeric(recess_end_date   - policy_start_date) / 30.4)
+#           ,polfinal_start_month = (as.numeric(recess_start_date - policy_final_date) / 30.4)
+#           ,polfinal_end_month   = (as.numeric(recess_end_date   - policy_final_date) / 30.4)
+
+
+recess_split_tbl <- use_train_tbl %>%
+    mutate(policy_final_date = ifelse(policy_status == 'inforce'
+                                     ,snapshot_date
+                                     ,policy_statuschangedate) %>% as.Date(origin = '1970-01-01')
+          ,split_data = pmap(list(policy_start_date = policy_startdate
+                                 ,policy_final_date = policy_final_date
+                                 ,status            = lapsed
+                                 )
+                            ,calculate_recession_timesplits
+                            ,recess_start_date = as.Date('2008-01-01')
+                            ,recess_end_date   = as.Date('2012-12-31')
+                            )
+    )
+
+recess_data_tbl <- recess_split_tbl %>%
+    select(policy_id, cluster_id, prem_ape, policy_duration, sum_assured
+          ,dob_life1, gender_life1, smoker_life1, isjointlife, islifeonly
+          ,policy_startdate
+          ,mortgage_status, age_at_policy_start, split_data) %>%
+    unnest() %>%
+    mutate(epoch = epoch %>% as_factor %>% relevel(ref = 'BEFORE'))
+
+recess_data_tbl %>% glimpse()
+```
+
+
+
+## Split Lifetime Year
+
+One way to account for time-varying effects in the model is to split the
+dataset into different years for the lifetimes of the policies and fit each
+one separately. As we expect most of the time-varying effects to occur in the
+first five years or so of the book, we split the first seven years into separate
+cohorts and then collectively gather the rest.
+
+The `survival` package provides functionality to do this using the function
+`survSplit()` and so we use that.
+
+```{r split_policy_lifetimes, echo=TRUE, cache=TRUE}
+splitdata_tbl <- use_train_tbl %>%
+    select(policy_id, cluster_id, prem_ape, policy_duration, sum_assured
+          ,dob_life1, gender_life1, smoker_life1, isjointlife, islifeonly
+          ,mortgage_status, age_at_policy_start, month_reached, lapsed
+           ) %>%
+    survSplit(Surv(month_reached, lapsed) ~ .
+             ,data = .
+             ,cut   = c(12, 24, 36, 48, 60, 84)
+             ,start = 'start'
+             ,end   = 'end'
+              ) %>%
+    as_data_frame
+```
+
+Now we fit our basic three-predictor CoxPH model on the various segments of
+data and see what effect this approach has on the coefficients and the tests
+for Proportional Hazards.
+
+```{r fit_split_data, echo=TRUE}
+splitdata_coxph_lst <- splitdata_tbl %>%
+    split(.$start) %>%
+    map(~ coxph(Surv(start, end, lapsed) ~ gender_life1 + smoker_life1 +
+                                           cluster_id + mortgage_status
+               ,data = .))
+
+splitdata_phtests_lst <- splitdata_coxph_lst %>%
+    map(cox.zph)
+```
+
+Having constructed the tests for each split, we now want to look at the all,
+starting with the visuals, just to make sure they appear reasonable at
+preserving proportional hazards.
+
+```{r plot_coxzph_visuals, echo=TRUE, fig.height=14, fig.width=18}
+splitdata_phtests_lst %>%
+    map(ggcoxzph, resid = FALSE)
+```
+
+
+
+
+
+
+

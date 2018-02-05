@@ -53,20 +53,25 @@ data_snapshot_date <- as.Date('2015-12-31')
 With the original dataset we had all four product types: Protection, Savings,
 Pensions and Alternative Retirement Funds (ARFs).
 
+In this analysis, we narrow the focus of our investigation into protection
+policies with monthly premium with sum assureds of less than one million euro
+as larger risks are generally subjected to more rigourous underwriting and
+tend to have different customer behaviour.
 
 ```{r load_data, echo=TRUE}
 lifebook_tbl <- read_feather("data/lifebook_cleaned.feather")
                         
 protection_book_tbl <- lifebook_tbl %>%
-    filter(prod_type == 'protection'
-          ,prem_freq == 12
-          ,prem_type == 'RP'
+    filter(prod_type   == 'protection'
+          ,prem_freq   == 12
+          ,prem_type   == 'RP'
+          ,sum_assured <= 1e6
            )
 
 protection_book_tbl %>% glimpse
 ```
 
-So we have over 700,000 protection policies with a monthly payment frequency.
+So we have 670,000 protection policies in our set for analysis.
 
 This dataset will be the basis of our lapse investigation, but to do so we
 need to create a few extra derived variables.
@@ -134,6 +139,25 @@ for(plot_varname in derived_vars) {
     print(explore_plot)
 }
 ```
+
+
+## Set Categorical Reference Levels
+
+We want to set a reference level for each of the categorical variables in the
+dataset to aid with interpretation so we convert a number of the character
+variables to be factors with a given reference.
+
+```{r set_categorical_references, echo=TRUE}
+protection_book_tbl <- protection_book_tbl %>%
+    mutate(
+        mortgage_status = mortgage_status %>% as_factor %>% relevel(ref = 'TERM')
+       ,cluster_id      = cluster_id      %>% as_factor %>% relevel(ref = 'n6_c0')   
+       ,gender_life1    = gender_life1    %>% as_factor %>% relevel(ref = 'M')
+       ,smoker_life1    = smoker_life1    %>% as_factor %>% relevel(ref = 'N')
+        )
+
+```
+
 
 
 
@@ -288,7 +312,7 @@ the beginning of 2008 and ending at the end of 2012.
 ```{r add_lapse_flags, echo=TRUE}
 lapse_data_tbl <- lapse_data_tbl %>%
     mutate(epoch_label = case_when(
-               tstamp_month < as.Date('2008-01-01')        ~ 'Pre-Recession'
+               tstamp_month <  as.Date('2008-01-01')       ~ 'Pre-Recession'
               ,tstamp_month >= as.Date('2008-01-01') &
                tstamp_month <= as.Date('2012-12-31')       ~ 'Recession'
               ,TRUE                                        ~ 'Post-Recession'
@@ -499,7 +523,7 @@ basic_01_coxph <- coxph(Surv(month_reached, lapsed) ~ gender_life1
                        ,data = split_lst$train
                         )
 
-basic_01_coxph %>% summary
+basic_01_coxph %>% summary()
 basic_01_coxph %>% tidy()
 basic_01_coxph %>% glance()
 ```
@@ -516,7 +540,7 @@ basic_02_coxph <- coxph(Surv(month_reached, lapsed) ~ smoker_life1
                        ,data = split_lst$train
                         )
 
-basic_02_coxph %>% summary
+basic_02_coxph %>% summary()
 basic_02_coxph %>% tidy()
 basic_02_coxph %>% glance()
 ```
@@ -534,7 +558,7 @@ basic_03_coxph <- coxph(
    ,data = split_lst$train
                         )
 
-basic_03_coxph %>% summary
+basic_03_coxph %>% summary()
 basic_03_coxph %>% tidy()
 basic_03_coxph %>% glance()
 ```
@@ -549,11 +573,7 @@ the model.
 basic_04_coxph <- coxph(
     Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1 + cluster_id
    ,data = split_lst$train
-                        )
-
-basic_04_coxph %>% summary
-basic_04_coxph %>% tidy()
-basic_04_coxph %>% glance()
+)
 ```
 
 Note that the model with just the `cluster_id` as a predictor gives a better
