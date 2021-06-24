@@ -142,7 +142,7 @@ basic_01_coxph %>% cox.zph() %>% ggcoxzph(resid = FALSE)
 
 
 
-# Investigate Strata
+## Investigate Strata
 
 An additional way to account for time-varying effects of covariates is to
 stratify the baseline hazard rate: that is, we allow different levels of
@@ -182,13 +182,59 @@ strat_02_coxph %>% glance()
 We quickly compare the models:
 
 ```{r compare_three_models, echo=TRUE}
-basic_01_coxph %>% glance()
-strat_01_coxph %>% glance()
-strat_02_coxph %>% glance()
+list(basic_01_coxph = basic_01_coxph %>% glance
+    ,strat_01_coxph = strat_01_coxph %>% glance
+    ,strat_02_coxph = strat_02_coxph %>% glance) %>%
+    bind_rows(.id = 'model') %>%
+    select(model, n, nevent, concordance, std.error.concordance, logLik, AIC, BIC)
 ```
 
 We appear to gain very little from stratifying the risks for gender and smoking
 status, but we may look at this later once we use out-of-sample test data.
+
+
+# Using the Survival Model
+
+The noisy nature of the outputs of survival model and the use of the
+concordance index mean it is difficult to measure the effectiveness of the
+models.
+
+Considering this, we move on to possible uses of such a model in practice,
+potentially allowing us to construct some measure of model efficacy from how it
+is used.
+
+## Estimating Individual Survival Curves
+
+We start with the simple use case of constructing individual survival curves
+for each policy. The Cox model outputs a proportional hazard for each policy
+and this is applied to the baseline hazard used. Having fit a Cox model, we
+use this to produce each curve.
+
+The default baseline in R takes averages of all the variables in the dataset,
+including categorical variables. As these are encoded via integers we get the
+silly inclusion of floating-point numbers for the values on the baseline.
+
+Instead, we construct our own baseline entry and we use that.
+
+```{r construct_baseline, echo=TRUE}
+lapse_baseline_tbl <- data_frame(
+    gender_life1        = 'F'
+   ,smoker_life1        = 'N'
+   ,cluster_id          = 'n6_c0'
+   ,mortgage_status     = 'TERM'
+   ,isjointlife         = FALSE
+   ,prem_ape            = use_train_tbl %>% pull(prem_ape) %>% mean
+   ,age_at_policy_start = use_train_tbl %>% pull(age_at_policy_start) %>% mean
+)
+```
+
+
+Using this data, we calculate the baseline hazard rate predicted from our Cox
+model.
+
+```{r calculate_baseline_survival_curve, echo=TRUE}
+
+```
 
 
 

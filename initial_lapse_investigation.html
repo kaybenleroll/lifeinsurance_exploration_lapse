@@ -190,7 +190,7 @@ protection_book_tbl %&gt;% glimpse</code></pre>
 ## $ policy_status           &lt;chr&gt; &quot;completed&quot;, &quot;completed&quot;, &quot;completed&quot;, &quot;lapsed&quot;, &quot;lap...
 ## $ policy_statuschangedate &lt;date&gt; 2010-01-02, 2010-01-02, 2010-01-02, 1995-07-02, 1991...
 ## $ lapsed                  &lt;lgl&gt; FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, FALSE, F...</code></pre>
-<p>So we have over 700,000 protection policies with a monthly payment frequency.</p>
+<p>So we have 670,000 protection policies in our set for analysis.</p>
 <p>This dataset will be the basis of our lapse investigation, but to do so we need to create a few extra derived variables.</p>
 <div id="create-derived-values" class="section level2">
 <h2><span class="header-section-number">1.1</span> Create Derived Values</h2>
@@ -483,7 +483,10 @@ ggsurvplot(lapse_smoker_km, censor = FALSE, break.time.by = 12, conf.int = TRUE)
 <pre class="r"><code>test_prop &lt;- 0.4
 
 split_lst &lt;- protection_book_tbl %&gt;%
-    resample_partition(c(train = 1 - test_prop, test = test_prop))</code></pre>
+    resample_partition(c(train = 1 - test_prop, test = test_prop))
+
+train_tbl &lt;- split_lst$train %&gt;% as_data_frame()
+test_tbl  &lt;- split_lst$test  %&gt;% as_data_frame()</code></pre>
 <p>We output the split for later use in further worksheets.</p>
 <pre class="r"><code>split_lst$train %&gt;% as_data_frame %&gt;% write_feather(path = 'data/protection_train.feather')
 split_lst$test  %&gt;% as_data_frame %&gt;% write_feather(path = 'data/protection_test.feather')</code></pre>
@@ -493,12 +496,12 @@ split_lst$test  %&gt;% as_data_frame %&gt;% write_feather(path = 'data/protectio
 <p>Note that we are still very much in the ‘exploration’ phase: the purposes of these models is to get a feel for the data - we are not yet moving on to producing models for the purposes of prediction just yet.</p>
 <p>For our first model, we simply fit the data to the gender parameter:</p>
 <pre class="r"><code>basic_01_coxph &lt;- coxph(Surv(month_reached, lapsed) ~ gender_life1
-                       ,data = split_lst$train
+                       ,data = train_tbl
                         )
 
 basic_01_coxph %&gt;% summary()</code></pre>
 <pre><code>## Call:
-## coxph(formula = Surv(month_reached, lapsed) ~ gender_life1, data = split_lst$train)
+## coxph(formula = Surv(month_reached, lapsed) ~ gender_life1, data = train_tbl)
 ## 
 ##   n= 401865, number of events= 159926 
 ## 
@@ -512,28 +515,28 @@ basic_01_coxph %&gt;% summary()</code></pre>
 ## 
 ## Concordance= 0.515  (se = 0.001 )
 ## Rsquare= 0.001   (max possible= 1 )
-## Likelihood ratio test= 217  on 1 df,   p=0
-## Wald test            = 215  on 1 df,   p=0
-## Score (logrank) test = 215  on 1 df,   p=0</code></pre>
+## Likelihood ratio test= 217  on 1 df,   p=&lt;2e-16
+## Wald test            = 215  on 1 df,   p=&lt;2e-16
+## Score (logrank) test = 215  on 1 df,   p=&lt;2e-16</code></pre>
 <pre class="r"><code>basic_01_coxph %&gt;% tidy()</code></pre>
-<pre><code>##            term   estimate  std.error statistic p.value   conf.low  conf.high
-## 1 gender_life1F -0.0807703 0.00550873  -14.6622       0 -0.0915672 -0.0699733</code></pre>
+<pre><code>##            term   estimate  std.error statistic     p.value   conf.low  conf.high
+## 1 gender_life1F -0.0807703 0.00550873  -14.6622 1.12527e-48 -0.0915672 -0.0699733</code></pre>
 <pre class="r"><code>basic_01_coxph %&gt;% glance()</code></pre>
-<pre><code>##        n nevent statistic.log p.value.log statistic.sc p.value.sc statistic.wald
-## 1 401865 159926       217.378           0      215.098          0         214.98
+<pre><code>##        n nevent statistic.log p.value.log statistic.sc  p.value.sc statistic.wald
+## 1 401865 159926       217.378 3.37534e-49      215.098 1.06111e-48         214.98
 ##   p.value.wald   r.squared r.squared.max concordance std.error.concordance   logLik
-## 1            0 0.000540777      0.999946    0.515043           0.000621362 -1975349
+## 1  1.12527e-48 0.000540777      0.999946    0.515043           0.000621362 -1975349
 ##       AIC     BIC
 ## 1 3950699 3950709</code></pre>
 <p>The concordance index for this model is about 0.51 - only slightly above the reference level of 0.50, so this model contains little in the way of predictive power.</p>
 <p>We also want to add smoking status, so we try that. We will look at its effect as the sole predictor first.</p>
 <pre class="r"><code>basic_02_coxph &lt;- coxph(Surv(month_reached, lapsed) ~ smoker_life1
-                       ,data = split_lst$train
+                       ,data = train_tbl
                         )
 
 basic_02_coxph %&gt;% summary()</code></pre>
 <pre><code>## Call:
-## coxph(formula = Surv(month_reached, lapsed) ~ smoker_life1, data = split_lst$train)
+## coxph(formula = Surv(month_reached, lapsed) ~ smoker_life1, data = train_tbl)
 ## 
 ##   n= 401865, number of events= 159926 
 ## 
@@ -549,9 +552,9 @@ basic_02_coxph %&gt;% summary()</code></pre>
 ## 
 ## Concordance= 0.513  (se = 0.001 )
 ## Rsquare= 0.005   (max possible= 1 )
-## Likelihood ratio test= 2018  on 2 df,   p=0
-## Wald test            = 2085  on 2 df,   p=0
-## Score (logrank) test = 2096  on 2 df,   p=0</code></pre>
+## Likelihood ratio test= 2018  on 2 df,   p=&lt;2e-16
+## Wald test            = 2085  on 2 df,   p=&lt;2e-16
+## Score (logrank) test = 2096  on 2 df,   p=&lt;2e-16</code></pre>
 <pre class="r"><code>basic_02_coxph %&gt;% tidy()</code></pre>
 <pre><code>##            term   estimate  std.error statistic     p.value   conf.low  conf.high
 ## 1 smoker_life1S -0.0394492 0.00617855  -6.38486 1.71555e-10 -0.0515589 -0.0273394
@@ -567,12 +570,12 @@ basic_02_coxph %&gt;% summary()</code></pre>
 <p>We do have a socio-economic clustering in this data, and we do know that this had a profound effect on the economy with young families losing their job and forgoing their mortgage for example, so we look at that.</p>
 <pre class="r"><code>basic_03_coxph &lt;- coxph(
     Surv(month_reached, lapsed) ~ cluster_id
-   ,data = split_lst$train
+   ,data = train_tbl
                         )
 
 basic_03_coxph %&gt;% summary()</code></pre>
 <pre><code>## Call:
-## coxph(formula = Surv(month_reached, lapsed) ~ cluster_id, data = split_lst$train)
+## coxph(formula = Surv(month_reached, lapsed) ~ cluster_id, data = train_tbl)
 ## 
 ##   n= 401865, number of events= 159926 
 ## 
@@ -594,16 +597,16 @@ basic_03_coxph %&gt;% summary()</code></pre>
 ## 
 ## Concordance= 0.562  (se = 0.001 )
 ## Rsquare= 0.024   (max possible= 1 )
-## Likelihood ratio test= 9588  on 5 df,   p=0
-## Wald test            = 9820  on 5 df,   p=0
-## Score (logrank) test = 10063  on 5 df,   p=0</code></pre>
+## Likelihood ratio test= 9588  on 5 df,   p=&lt;2e-16
+## Wald test            = 9820  on 5 df,   p=&lt;2e-16
+## Score (logrank) test = 10063  on 5 df,   p=&lt;2e-16</code></pre>
 <pre class="r"><code>basic_03_coxph %&gt;% tidy()</code></pre>
-<pre><code>##              term    estimate  std.error  statistic  p.value   conf.low   conf.high
-## 1 cluster_idn6_c5  0.45335536 0.00688217  65.873895 0.000000  0.4398666  0.46684416
-## 2 cluster_idn6_c1  0.00594886 0.00892470   0.666561 0.505052 -0.0115432  0.02344094
-## 3 cluster_idn6_c2  0.00239185 0.00827426   0.289072 0.772527 -0.0138254  0.01860911
-## 4 cluster_idn6_c3 -0.01514259 0.01085732  -1.394690 0.163109 -0.0364225  0.00613737
-## 5 cluster_idn6_c4 -0.29977736 0.01016337 -29.495864 0.000000 -0.3196972 -0.27985752</code></pre>
+<pre><code>##              term    estimate  std.error  statistic      p.value   conf.low   conf.high
+## 1 cluster_idn6_c5  0.45335536 0.00688217  65.873895  0.00000e+00  0.4398666  0.46684416
+## 2 cluster_idn6_c1  0.00594886 0.00892470   0.666561  5.05052e-01 -0.0115432  0.02344094
+## 3 cluster_idn6_c2  0.00239185 0.00827426   0.289072  7.72527e-01 -0.0138254  0.01860911
+## 4 cluster_idn6_c3 -0.01514259 0.01085732  -1.394690  1.63109e-01 -0.0364225  0.00613737
+## 5 cluster_idn6_c4 -0.29977736 0.01016337 -29.495864 3.25295e-191 -0.3196972 -0.27985752</code></pre>
 <pre class="r"><code>basic_03_coxph %&gt;% glance()</code></pre>
 <pre><code>##        n nevent statistic.log p.value.log statistic.sc p.value.sc statistic.wald
 ## 1 401865 159926       9588.38           0      10062.8          0        9819.54
@@ -615,7 +618,7 @@ basic_03_coxph %&gt;% summary()</code></pre>
 <p>We now look at the model with all three predictors combined as predictors in the model.</p>
 <pre class="r"><code>basic_04_coxph &lt;- coxph(
     Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1 + cluster_id
-   ,data = split_lst$train
+   ,data = train_tbl
 )</code></pre>
 <p>Note that the model with just the <code>cluster_id</code> as a predictor gives a better concordance than models with more variables, which is counterintuitive from a regression point of view. This definitely requires investigation, as it is likely due to violations of the assumptions of the Cox-PH model. Even so, we would hope for a better concordance index than 0.56, so we need a more thorough analysis.</p>
 </div>

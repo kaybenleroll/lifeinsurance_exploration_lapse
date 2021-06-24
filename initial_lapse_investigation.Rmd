@@ -496,6 +496,9 @@ test_prop <- 0.4
 
 split_lst <- protection_book_tbl %>%
     resample_partition(c(train = 1 - test_prop, test = test_prop))
+
+train_tbl <- split_lst$train %>% as_data_frame()
+test_tbl  <- split_lst$test  %>% as_data_frame()
 ```
 
 We output the split for later use in further worksheets.
@@ -520,7 +523,7 @@ For our first model, we simply fit the data to the gender parameter:
 
 ```{r fit_01_model, echo=TRUE}
 basic_01_coxph <- coxph(Surv(month_reached, lapsed) ~ gender_life1
-                       ,data = split_lst$train
+                       ,data = train_tbl
                         )
 
 basic_01_coxph %>% summary()
@@ -537,7 +540,7 @@ as the sole predictor first.
 
 ```{r fit_02_model, echo=TRUE}
 basic_02_coxph <- coxph(Surv(month_reached, lapsed) ~ smoker_life1
-                       ,data = split_lst$train
+                       ,data = train_tbl
                         )
 
 basic_02_coxph %>% summary()
@@ -555,7 +558,7 @@ forgoing their mortgage for example, so we look at that.
 ```{r fit_03_model, echo=TRUE}
 basic_03_coxph <- coxph(
     Surv(month_reached, lapsed) ~ cluster_id
-   ,data = split_lst$train
+   ,data = train_tbl
                         )
 
 basic_03_coxph %>% summary()
@@ -572,7 +575,7 @@ the model.
 ```{r fit_04_model, echo=TRUE}
 basic_04_coxph <- coxph(
     Surv(month_reached, lapsed) ~ gender_life1 + smoker_life1 + cluster_id
-   ,data = split_lst$train
+   ,data = train_tbl
 )
 ```
 
